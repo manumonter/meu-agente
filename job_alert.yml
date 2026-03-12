@@ -1,0 +1,42 @@
+name: 🎯 Alerta de Vagas
+
+on:
+  schedule:
+    #  A cada 30 min, seg–sex, das 7h às 22h (Brasília = UTC-3)
+    - cron: '0,30 10,11,12,13,14,15,16,17,18,19,20,21,22,23,0 * * 1-5'
+  workflow_dispatch: # permite rodar manualmente a qualquer hora
+
+jobs:
+  checar-vagas:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      # Restaura o histórico de vagas já vistas do cache
+      - name: 📂 Restaurar histórico
+        uses: actions/cache@v4
+        with:
+          path: vagas_vistas.json
+          key: historico-vagas-${{ runner.os }}
+          restore-keys: historico-vagas-
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: ▶️ Rodar agente
+        env:
+          EMAIL_REMETENTE:    ${{ secrets.EMAIL_REMETENTE }}
+          EMAIL_SENHA_APP:    ${{ secrets.EMAIL_SENHA_APP }}
+          EMAIL_DESTINATARIO: ${{ secrets.EMAIL_DESTINATARIO }}
+        run: python job_alert.py
+
+      # Salva o histórico atualizado no cache para o próximo ciclo
+      - name: 💾 Salvar histórico atualizado
+        uses: actions/cache@v4
+        with:
+          path: vagas_vistas.json
+          key: historico-vagas-${{ runner.os }}-${{ github.run_id }}
