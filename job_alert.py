@@ -103,6 +103,48 @@ def coletar_vagas_novas(historico: set) -> list[dict]:
         print(f"  🔍 Buscando: '{termo}'…")
         todas.extend(buscar_vagas_rss(termo, CONFIG["localidade"]))
 
+    from email.utils import parsedate_to_datetime
+    from datetime import timezone
+
+    agora = datetime.now(timezone.utc)
+
+    # Filtra só as novas
+    novas = []
+    for v in todas:
+        if v["id"] in historico:
+            continue
+        # Filtro de 48h
+        try:
+            data_vaga = parsedate_to_datetime(v["data"])
+            horas = (agora - data_vaga).total_seconds() / 3600
+            if horas > 48:
+                continue
+        except Exception:
+            pass  # se não conseguir parsear a data, inclui a vaga
+        novas.append(v)
+
+    # Remove duplicatas dentro da própria rodada
+    vistas, unicas = set(), []
+    for v in novas:
+        if v["id"] not in vistas:
+            vistas.add(v["id"])
+            unicas.append(v)
+
+    # Score rápido de relevância
+    for v in unicas:
+        t = v["titulo"].lower()
+        v["score"] = (
+            (3 if ("remoto" in t or "remote" in t) else 0) +
+            (2 if "analista de dados" in t else 0) +
+            (1 if any(k in t for k in ["python", "sql", "bi", "power bi"]) else 0)
+        )
+
+    return sorted(unicas, key=lambda x: x["score"], reverse=True)
+    todas = []
+    for termo in CONFIG["termos_busca"]:
+        print(f"  🔍 Buscando: '{termo}'…")
+        todas.extend(buscar_vagas_rss(termo, CONFIG["localidade"]))
+
     # Filtra só as novas
     novas = [v for v in todas if v["id"] not in historico]
 
