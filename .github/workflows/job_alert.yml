@@ -35,8 +35,10 @@ jobs:
         run: python job_alert.py
 
       # Salva o histórico atualizado no cache para o próximo ciclo
-      - name: 💾 Salvar histórico atualizado
-        uses: actions/cache@v4
-        with:
-          path: vagas_vistas.json
-          key: historico-vagas-${{ runner.os }}-${{ github.run_id }}
+      - name: 💾 Salvar histórico no repositório
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add vagas_vistas.json || true
+          git diff --cached --quiet || git commit -m "atualiza histórico de vagas"
+          git push
