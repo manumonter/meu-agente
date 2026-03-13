@@ -41,18 +41,24 @@ CONFIG = {
 # 1. HISTÓRICO — evita reenviar vagas antigas
 # ══════════════════════════════════════════════
 
+HISTORICO_URL = (
+    f"https://raw.githubusercontent.com/"
+    f"{os.getenv('GITHUB_REPOSITORY','')}/main/vagas_vistas.json"
+)
+
 def carregar_historico() -> set:
-    path = Path(CONFIG["arquivo_historico"])
-    if path.exists():
-        try:
-            return set(json.loads(path.read_text()))
-        except Exception:
-            return set()
-    return set()
+    try:
+        req = urllib.request.Request(
+            HISTORICO_URL,
+            headers={"Cache-Control": "no-cache"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return set(json.loads(resp.read()))
+    except Exception:
+        return set()
 
 
 def salvar_historico(ids: set):
-    # Mantém apenas os últimos 500 IDs para o arquivo não crescer indefinidamente
     lista = list(ids)[-500:]
     Path(CONFIG["arquivo_historico"]).write_text(json.dumps(lista))
 
@@ -299,11 +305,11 @@ def main():
     novas = coletar_vagas_novas(historico)
     print(f"  🆕 Vagas novas encontradas: {len(novas)}")
 
+   historico.update(v["id"] for v in novas)
+    salvar_historico(historico)
+
     if novas:
         enviar_email(novas)
-        # Atualiza histórico com as novas IDs
-        historico.update(v["id"] for v in novas)
-        salvar_historico(historico)
     else:
         print("  💤 Nenhuma vaga nova. Nenhum email enviado.")
 
