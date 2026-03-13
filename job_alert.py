@@ -11,9 +11,10 @@ import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 # =============================================
@@ -32,26 +33,19 @@ CONFIG = {
     ],
     "localidade": "Brasil",
 
-    # Arquivo que guarda IDs das vagas já vistas (evita duplicatas)
     "arquivo_historico": "vagas_vistas.json",
 }
 
 
 # ══════════════════════════════════════════════
-# 1. HISTÓRICO — evita reenviar vagas antigas
+# 1. HISTÓRICO
 # ══════════════════════════════════════════════
 
-HISTORICO_URL = (
-    f"https://raw.githubusercontent.com/"
-    f"{os.getenv('GITHUB_REPOSITORY','')}/main/vagas_vistas.json"
-)
-
 def carregar_historico() -> set:
+    repo = os.getenv("GITHUB_REPOSITORY", "")
+    url = f"https://raw.githubusercontent.com/{repo}/main/vagas_vistas.json"
     try:
-        req = urllib.request.Request(
-            HISTORICO_URL,
-            headers={"Cache-Control": "no-cache"}
-        )
+        req = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             return set(json.loads(resp.read()))
     except Exception:
@@ -64,11 +58,10 @@ def salvar_historico(ids: set):
 
 
 # ══════════════════════════════════════════════
-# 2. BUSCA — LinkedIn RSS público via Google
+# 2. BUSCA
 # ══════════════════════════════════════════════
 
 def buscar_vagas_rss(termo: str, localidade: str) -> list[dict]:
-    """Busca vagas usando Google News RSS — gratuito e sem autenticação."""
     query = f'site:linkedin.com/jobs "{termo}" "{localidade}"'
     encoded = urllib.parse.quote(query)
     url = (
@@ -87,16 +80,15 @@ def buscar_vagas_rss(termo: str, localidade: str) -> list[dict]:
             descricao = re.sub(r"<[^>]+>", "", item.findtext("description", ""))
             pub_date  = item.findtext("pubDate", "")
 
-            # ID único baseado no título + link
             vaga_id = re.sub(r"\W+", "", (titulo + link).lower())[:80]
 
             vagas.append({
-                "id":       vaga_id,
-                "titulo":   titulo,
-                "link":     link,
+                "id":        vaga_id,
+                "titulo":    titulo,
+                "link":      link,
                 "descricao": descricao.strip()[:350],
-                "data":     pub_date,
-                "termo":    termo,
+                "data":      pub_date,
+                "termo":     termo,
             })
     except Exception as e:
         print(f"  ⚠ Erro ao buscar '{termo}': {e}")
@@ -109,59 +101,27 @@ def coletar_vagas_novas(historico: set) -> list[dict]:
         print(f"  🔍 Buscando: '{termo}'…")
         todas.extend(buscar_vagas_rss(termo, CONFIG["localidade"]))
 
-    from email.utils import parsedate_to_datetime
-    from datetime import timezone
-
     agora = datetime.now(timezone.utc)
 
-    # Filtra só as novas
     novas = []
     for v in todas:
         if v["id"] in historico:
             continue
-        # Filtro de 48h
         try:
             data_vaga = parsedate_to_datetime(v["data"])
             horas = (agora - data_vaga).total_seconds() / 3600
             if horas > 48:
                 continue
         except Exception:
-            pass  # se não conseguir parsear a data, inclui a vaga
+            pass
         novas.append(v)
 
-    # Remove duplicatas dentro da própria rodada
     vistas, unicas = set(), []
     for v in novas:
         if v["id"] not in vistas:
             vistas.add(v["id"])
             unicas.append(v)
 
-    # Score rápido de relevância
-    for v in unicas:
-        t = v["titulo"].lower()
-        v["score"] = (
-            (3 if ("remoto" in t or "remote" in t) else 0) +
-            (2 if "analista de dados" in t else 0) +
-            (1 if any(k in t for k in ["python", "sql", "bi", "power bi"]) else 0)
-        )
-
-    return sorted(unicas, key=lambda x: x["score"], reverse=True)
-    todas = []
-    for termo in CONFIG["termos_busca"]:
-        print(f"  🔍 Buscando: '{termo}'…")
-        todas.extend(buscar_vagas_rss(termo, CONFIG["localidade"]))
-
-    # Filtra só as novas
-    novas = [v for v in todas if v["id"] not in historico]
-
-    # Remove duplicatas dentro da própria rodada
-    vistas, unicas = set(), []
-    for v in novas:
-        if v["id"] not in vistas:
-            vistas.add(v["id"])
-            unicas.append(v)
-
-    # Score rápido de relevância
     for v in unicas:
         t = v["titulo"].lower()
         v["score"] = (
@@ -174,12 +134,12 @@ def coletar_vagas_novas(historico: set) -> list[dict]:
 
 
 # ══════════════════════════════════════════════
-# 3. EMAIL — alerta limpo e direto
+# 3. EMAIL
 # ══════════════════════════════════════════════
 
 def gerar_html_alerta(vagas: list[dict]) -> str:
-    agora  = datetime.now().strftime("%d/%m/%Y %H:%M")
-    total  = len(vagas)
+    agora   = datetime.now().strftime("%d/%m/%Y %H:%M")
+    total   = len(vagas)
     remotas = sum(1 for v in vagas if "remoto" in v["titulo"].lower() or "remote" in v["titulo"].lower())
 
     cards = ""
@@ -205,18 +165,12 @@ def gerar_html_alerta(vagas: list[dict]) -> str:
                     line-height:1.5;">{v['descricao'][:220]}…</p>
           <div style="margin-top:12px;display:flex;
                       align-items:center;gap:14px;flex-wrap:wrap;">
-            <span style="font-size:12px;color:#94a3b8;">
-              🕐 {v['data'][:22]}
-            </span>
-            <span style="font-size:12px;color:#94a3b8;">
-              Relevância: {estrelas}
-            </span>
+            <span style="font-size:12px;color:#94a3b8;">🕐 {v['data'][:22]}</span>
+            <span style="font-size:12px;color:#94a3b8;">Relevância: {estrelas}</span>
             <a href="{v['link']}"
                style="background:#6366f1;color:#ffffff;padding:7px 16px;
                       border-radius:8px;text-decoration:none;
-                      font-size:13px;font-weight:600;">
-              Ver vaga →
-            </a>
+                      font-size:13px;font-weight:600;">Ver vaga →</a>
           </div>
         </div>"""
 
@@ -226,8 +180,6 @@ def gerar_html_alerta(vagas: list[dict]) -> str:
 <body style="margin:0;padding:0;background:#f1f5f9;
              font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
   <div style="max-width:620px;margin:0 auto;padding:24px;">
-
-    <!-- Cabeçalho -->
     <div style="background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
                 border-radius:16px;padding:28px 32px;
                 text-align:center;margin-bottom:20px;">
@@ -239,8 +191,6 @@ def gerar_html_alerta(vagas: list[dict]) -> str:
         Detectadas em {agora} — candidate-se agora!
       </p>
     </div>
-
-    <!-- Resumo -->
     <div style="background:#ffffff;border-radius:12px;padding:16px 20px;
                 margin-bottom:20px;border:1px solid #e2e8f0;
                 display:flex;justify-content:space-around;text-align:center;">
@@ -261,11 +211,7 @@ def gerar_html_alerta(vagas: list[dict]) -> str:
         <div style="font-size:12px;color:#94a3b8;margin-top:2px;">Alta relevância</div>
       </div>
     </div>
-
-    <!-- Cards de vagas -->
     {cards}
-
-    <!-- Rodapé -->
     <p style="text-align:center;font-size:11px;color:#cbd5e1;margin-top:20px;">
       Agente de Vagas • checagem a cada 30 min • candidate-se nas primeiras horas 🚀
     </p>
@@ -305,7 +251,7 @@ def main():
     novas = coletar_vagas_novas(historico)
     print(f"  🆕 Vagas novas encontradas: {len(novas)}")
 
-   historico.update(v["id"] for v in novas)
+    historico.update(v["id"] for v in novas)
     salvar_historico(historico)
 
     if novas:
